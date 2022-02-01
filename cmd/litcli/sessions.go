@@ -65,6 +65,11 @@ var addSessionCommand = cli.Command{
 				"include readonly|admin",
 			Value: "readonly",
 		},
+		cli.StringSliceFlag{
+			Name: "customcaveat",
+			Usage: "custom macaroon caveat to add to the baked " +
+				"macaroon",
+		},
 	},
 }
 
@@ -98,6 +103,7 @@ func addSession(ctx *cli.Context) error {
 			ExpiryTimestampSeconds: uint64(sessionExpiry),
 			MailboxServerAddr:      ctx.String("mailboxserveraddr"),
 			DevServer:              ctx.Bool("devserver"),
+			MacaroonCaveats:        ctx.StringSlice("customcaveat"),
 		},
 	)
 	if err != nil {
