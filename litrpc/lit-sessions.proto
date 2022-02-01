@@ -33,6 +33,8 @@ message AddSessionRequest {
     bool dev_server = 5;
 
     repeated MacaroonPermission macaroon_custom_permissions = 6;
+
+    repeated string macaroon_caveats = 7;
 }
 
 message MacaroonPermission {

@@ -128,9 +128,24 @@ func (s *sessionRpcServer) AddSession(_ context.Context,
 			"and readonly macaroon types supported in LiT")
 	}
 
+	// Custom caveats are allowed on all macaroon types.
+	var caveats []macaroon.Caveat
+	if len(req.MacaroonCaveats) > 0 {
+		if typ == session.TypeUIPassword {
+			return nil, fmt.Errorf("cannot specify custom " +
+				"macaroon caveats on UI password auth type")
+		}
+
+		for _, caveatStr := range req.MacaroonCaveats {
+			caveats = append(caveats, macaroon.Caveat{
+				Id: []byte(caveatStr),
+			})
+		}
+	}
+
 	sess, err := session.NewSession(
 		req.Label, typ, expiry, req.MailboxServerAddr, req.DevServer,
-		nil, nil,
+		nil, caveats,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error creating new session: %v", err)
@@ -191,10 +206,15 @@ func (s *sessionRpcServer) resumeSession(sess *session.Session) error {
 	}
 
 	var (
+		ctx      = context.Background()
 		caveats  []macaroon.Caveat
 		readOnly = sess.Type == session.TypeMacaroonReadonly
 	)
 
+	if sess.MacaroonRecipe != nil {
+		caveats = sess.MacaroonRecipe.Caveats
+	}
+	
 	// Add the session expiry as a macaroon caveat.
 	macExpiry := checkers.TimeBeforeCaveat(sess.Expiry)
 	caveats = append(caveats, macaroon.Caveat{
@@ -202,8 +222,7 @@ func (s *sessionRpcServer) resumeSession(sess *session.Session) error {
 	})
 
 	mac, err := s.cfg.superMacBaker(
-		context.Background(), sess.MacaroonRootKey,
-		&session.MacaroonRecipe{
+		ctx, sess.MacaroonRootKey, &session.MacaroonRecipe{
 			Permissions: GetAllPermissions(readOnly),
 			Caveats:     caveats,
 		},
