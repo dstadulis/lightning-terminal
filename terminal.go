@@ -23,6 +23,7 @@ import (
 	"github.com/lightninglabs/faraday/frdrpc"
 	"github.com/lightninglabs/faraday/frdrpcserver"
 	"github.com/lightninglabs/lightning-terminal/litrpc"
+	"github.com/lightninglabs/lightning-terminal/rpcmiddleware"
 	"github.com/lightninglabs/lightning-terminal/session"
 	"github.com/lightninglabs/lndclient"
 	"github.com/lightninglabs/loop"
@@ -162,6 +163,9 @@ type LightningTerminal struct {
 
 	macaroonService        *lndclient.MacaroonService
 	macaroonServiceStarted bool
+
+	middleware        *rpcmiddleware.Manager
+	middlewareStarted bool
 
 	restHandler http.Handler
 	restCancel  func()
@@ -579,6 +583,16 @@ func (g *LightningTerminal) startSubservers() error {
 	}
 	g.sessionRpcServerStarted = true
 
+	// Start the middleware manager.
+	g.middleware = rpcmiddleware.NewManager(
+		rpcmiddleware.DefaultInterceptTimeout, g.lndClient.Client,
+	)
+
+	if err = g.middleware.Start(); err != nil {
+		return err
+	}
+	g.middlewareStarted = true
+
 	return nil
 }
 
@@ -865,6 +879,10 @@ func (g *LightningTerminal) shutdown() error {
 			log.Errorf("Error stopping macaroon service: %v", err)
 			returnErr = err
 		}
+	}
+
+	if g.middlewareStarted {
+		g.middleware.Stop()
 	}
 
 	if g.lndClient != nil {
