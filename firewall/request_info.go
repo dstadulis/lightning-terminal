@@ -30,6 +30,7 @@ type RequestInfo struct {
 	MWRequestType   string
 	URI             string
 	GRPCMessageType string
+	IsError         bool
 	Serialized      []byte
 	Streaming       bool
 	Macaroon        *macaroon.Macaroon
@@ -55,6 +56,7 @@ func NewInfoFromRequest(req *lnrpc.RPCMiddlewareRequest) (*RequestInfo, error) {
 			MWRequestType:   MWRequestTypeRequest,
 			URI:             t.Request.MethodFullUri,
 			GRPCMessageType: t.Request.TypeName,
+			IsError:         t.Request.IsError,
 			Serialized:      t.Request.Serialized,
 			Streaming:       t.Request.StreamRpc,
 		}
@@ -64,6 +66,7 @@ func NewInfoFromRequest(req *lnrpc.RPCMiddlewareRequest) (*RequestInfo, error) {
 			MWRequestType:   MWRequestTypeResponse,
 			URI:             t.Response.MethodFullUri,
 			GRPCMessageType: t.Response.TypeName,
+			IsError:         t.Response.IsError,
 			Serialized:      t.Response.Serialized,
 			Streaming:       t.Response.StreamRpc,
 		}

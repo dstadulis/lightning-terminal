@@ -12,19 +12,19 @@ require (
 	github.com/jessevdk/go-flags v1.4.0
 	github.com/lightninglabs/faraday v0.2.8-alpha.0.20220624141723-ddd3cd123e62
 	github.com/lightninglabs/lightning-node-connect v0.1.11-alpha
-	github.com/lightninglabs/lndclient v0.15.0-10
+	github.com/lightninglabs/lndclient v1.0.1-0.20220802102817-0d3a9c0b4c54
 	github.com/lightninglabs/loop v0.19.1-beta.0.20220623090540-08209f61e304
 	github.com/lightninglabs/loop/swapserverrpc v1.0.1
 	github.com/lightninglabs/pool v0.5.7-alpha
 	github.com/lightninglabs/pool/auctioneerrpc v1.0.7
 	github.com/lightninglabs/protobuf-hex-display v1.4.3-hex-display
-	github.com/lightningnetwork/lnd v0.15.0-beta.rc6
+	github.com/lightningnetwork/lnd v0.15.0-beta.rc6.0.20220727000530-fec8fd9c63dc
 	github.com/lightningnetwork/lnd/cert v1.1.1
 	github.com/lightningnetwork/lnd/tlv v1.0.3
 	github.com/mwitkow/go-conntrack v0.0.0-20190716064945-2f068394615f
 	github.com/mwitkow/grpc-proxy v0.0.0-20181017164139-0f1106ef9c76
 	github.com/stretchr/testify v1.7.1
-	github.com/urfave/cli v1.22.4
+	github.com/urfave/cli v1.22.9
 	go.etcd.io/bbolt v1.3.6
 	golang.org/x/crypto v0.0.0-20211215153901-e495a2d5b3d3
 	golang.org/x/net v0.0.0-20211216030914-fe4d6282115f
@@ -125,7 +125,7 @@ require (
 	github.com/prometheus/procfs v0.6.0 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/rogpeppe/fastuuid v1.2.0 // indirect
-	github.com/rs/cors v1.7.0 // indirect
+	github.com/rs/cors v1.8.2 // indirect
 	github.com/russross/blackfriday/v2 v2.0.1 // indirect
 	github.com/shopspring/decimal v1.2.0 // indirect
 	github.com/shurcooL/sanitized_anchor_name v1.0.0 // indirect
@@ -173,9 +173,11 @@ require (
 	sigs.k8s.io/yaml v1.2.0 // indirect
 )
 
-// Loop and Pool still reference the RC6 version which causes go mod to choose
-// that one as well (not properly recognizing the .rc6 tag). So we force its
-// decision with a replace.
-replace github.com/lightningnetwork/lnd => github.com/lightningnetwork/lnd v0.15.0-beta
+replace (
+	github.com/lightninglabs/faraday => github.com/ellemouton/faraday v0.2.3-alpha.0.20220715090422-46e238ebdd51
+	github.com/lightninglabs/loop => github.com/ellemouton/loop v0.11.4-beta.0.20220715090337-d1b0f92c26cb
+	github.com/lightninglabs/loop/swapserverrpc => github.com/ellemouton/loop/swapserverrpc v0.0.0-20220715090337-d1b0f92c26cb
+	github.com/lightninglabs/pool => github.com/ellemouton/pool v0.5.0-alpha.0.20220715090217-2f07a65237c1
+)
 
 go 1.17

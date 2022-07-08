@@ -569,10 +569,18 @@ func (g *LightningTerminal) startSubservers() error {
 		g.poolStarted = true
 	}
 
+	rks, err := lndclient.NewBoltMacaroonStore(
+		path.Join(g.cfg.LitDir, g.cfg.Network), "macaroons.db",
+		5*time.Second,
+	)
+	if err != nil {
+		return err
+	}
+
 	log.Infof("Starting LiT macaroon service")
 	g.macaroonService, err = lndclient.NewMacaroonService(
 		&lndclient.MacaroonServiceConfig{
-			DBPath:           path.Join(g.cfg.LitDir, g.cfg.Network),
+			RootKeyStore:     rks,
 			MacaroonLocation: "litd",
 			StatelessInit:    !createDefaultMacaroons,
 			RequiredPerms:    litPermissions,
