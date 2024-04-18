@@ -42,6 +42,7 @@ func NewTaprootAssetsSubServer(cfg *tapcfg.Config,
 	tap.SetAgentName("litd")
 
 	return &taprootAssetsSubServer{
+		Server:    tap.NewServer(nil),
 		cfg:       cfg,
 		remoteCfg: remoteCfg,
 		remote:    remote,
@@ -86,14 +87,12 @@ func (t *taprootAssetsSubServer) Start(_ lnrpc.LightningClient,
 		return err
 	}
 
-	server, err := tapcfg.CreateSubServerFromConfig(
-		t.cfg, log, &lndGrpc.LndServices, t.errChan,
+	err = tapcfg.ConfigureSubServer(
+		t.Server, t.cfg, log, &lndGrpc.LndServices, t.errChan,
 	)
 	if err != nil {
 		return err
 	}
-
-	t.Server = server
 
 	return t.StartAsSubserver(lndGrpc)
 }
@@ -191,4 +190,10 @@ func (t *taprootAssetsSubServer) WhiteListedURLs() map[string]struct{} {
 		t.cfg.RpcConf.AllowPublicUniProofCourier || t.remote,
 		t.cfg.RpcConf.AllowPublicStats || t.remote,
 	)
+}
+
+// Impl returns the actual implementation of the sub-server. This might not be
+// set if the sub-server is running in remote mode.
+func (t *taprootAssetsSubServer) Impl() any {
+	return t.Server
 }

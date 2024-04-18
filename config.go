@@ -379,6 +379,7 @@ func loadAndValidateConfig(interceptor signal.Interceptor) (*Config, error) {
 			cfg.Remote.LitDebugLevel, cfg.Lnd.LogWriter,
 		)
 	} else {
+		SetupLoggers(cfg.Lnd.LogWriter, interceptor)
 		err = build.ParseAndSetDebugLevels(
 			cfg.Lnd.DebugLevel, cfg.Lnd.LogWriter,
 		)
