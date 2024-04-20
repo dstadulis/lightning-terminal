@@ -1170,8 +1170,8 @@ github.com/lightninglabs/pool/auctioneerrpc v1.1.1 h1:A0ekNG8TjqtGdTOlJXN8xMUmbr
 github.com/lightninglabs/pool/auctioneerrpc v1.1.1/go.mod h1:vRry7V7zF2QmaJ1J3jn3U9aOIf8SPJwa1TQfT/jLSAU=
 github.com/lightninglabs/protobuf-go-hex-display v1.30.0-hex-display h1:pRdza2wleRN1L2fJXd6ZoQ9ZegVFTAb2bOQfruJPKcY=
 github.com/lightninglabs/protobuf-go-hex-display v1.30.0-hex-display/go.mod h1:HV8QOd/L58Z+nl8r43ehVNZIU/HEI6OcFqwMG9pJV4I=
-github.com/lightninglabs/taproot-assets v0.3.3-0.20240419134906-c5e21ec8fd78 h1:qq3erSu1Z+ECIcZT3t1CFLX1gyiheveluO9+Q7wP+/4=
-github.com/lightninglabs/taproot-assets v0.3.3-0.20240419134906-c5e21ec8fd78/go.mod h1:/4bib1mwT/Bvr2f0n9GwmnjSSXMRZ7M03ZW8IRlZOKY=
+github.com/lightninglabs/taproot-assets v0.3.3-0.20240420025845-df4530ebb82d h1:LfKCjWzO6l9azoAsGEdcViKmt9I+Jp/s+NycbShaW/M=
+github.com/lightninglabs/taproot-assets v0.3.3-0.20240420025845-df4530ebb82d/go.mod h1:/4bib1mwT/Bvr2f0n9GwmnjSSXMRZ7M03ZW8IRlZOKY=
 github.com/lightningnetwork/lightning-onion v1.2.1-0.20230823005744-06182b1d7d2f h1:Pua7+5TcFEJXIIZ1I2YAUapmbcttmLj4TTi786bIi3s=
 github.com/lightningnetwork/lightning-onion v1.2.1-0.20230823005744-06182b1d7d2f/go.mod h1:c0kvRShutpj3l6B9WtTsNTBUtjSmjZXbJd9ZBRQOSKI=
 github.com/lightningnetwork/lnd v0.17.0-beta.rc6.0.20240419014805-cb514a1a570d h1:e9PCmf0PkcTzaa5A5JZs10YioLbccKz9B6LUp+2DQEY=
@@ -1294,8 +1294,9 @@ github.com/prometheus/client_model v0.0.0-20180712105110-5c3871d89910/go.mod h1:
 github.com/prometheus/client_model v0.0.0-20190129233127-fd36f4220a90/go.mod h1:xMI15A0UPsDsEKsMN9yxemIoYk6Tm2C1GtYGdfGttqA=
 github.com/prometheus/client_model v0.0.0-20190812154241-14fe0d1b01d4/go.mod h1:xMI15A0UPsDsEKsMN9yxemIoYk6Tm2C1GtYGdfGttqA=
 github.com/prometheus/client_model v0.2.0/go.mod h1:xMI15A0UPsDsEKsMN9yxemIoYk6Tm2C1GtYGdfGttqA=
-github.com/prometheus/client_model v0.3.0 h1:UBgGFHqYdG/TPFD1B1ogZywDqEkwp3fBMvqdiQ7Xew4=
 github.com/prometheus/client_model v0.3.0/go.mod h1:LDGWKZIo7rky3hgvBe+caln+Dr3dPggB5dvjtD7w9+w=
+github.com/prometheus/client_model v0.4.0 h1:5lQXD3cAg1OXBf4Wq03gTrXHeaV0TQvGfUooCfx1yqY=
+github.com/prometheus/client_model v0.4.0/go.mod h1:oMQmHW1/JoDwqLtg57MGgP/Fb1CJEYF2imWWhWtMkYU=
 github.com/prometheus/common v0.4.1/go.mod h1:TNfzLD0ON7rHzMJeJkieUDPYmFC7Snx/y86RQel1bk4=
 github.com/prometheus/common v0.10.0/go.mod h1:Tlit/dnDKsSWFlCLTWaA1cyBgKHSMdTB80sz/V91rCo=
 github.com/prometheus/common v0.26.0/go.mod h1:M7rCNAaPfAosfx8veZJCuw84e35h3Cfd9VFqTh1DIvc=

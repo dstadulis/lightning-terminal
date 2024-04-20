@@ -152,7 +152,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_golang v1.14.0 // indirect
-	github.com/prometheus/client_model v0.3.0 // indirect
+	github.com/prometheus/client_model v0.4.0 // indirect
 	github.com/prometheus/common v0.37.0 // indirect
 	github.com/prometheus/procfs v0.8.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
@@ -229,7 +229,7 @@ replace github.com/lightninglabs/loop => github.com/lightninglabs/loop v0.28.0-b
 
 replace github.com/btcsuite/btcwallet => github.com/btcsuite/btcwallet v0.16.10-0.20240305014015-f7c216e78ee8
 
-replace github.com/lightninglabs/taproot-assets => github.com/lightninglabs/taproot-assets v0.3.3-0.20240419134906-c5e21ec8fd78
+replace github.com/lightninglabs/taproot-assets => github.com/lightninglabs/taproot-assets v0.3.3-0.20240420025845-df4530ebb82d
 
 replace github.com/lightningnetwork/lnd => github.com/lightningnetwork/lnd v0.17.0-beta.rc6.0.20240419014805-cb514a1a570d
 
