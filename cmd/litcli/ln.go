@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
+	"github.com/btcsuite/btcd/wire"
 	"github.com/lightninglabs/taproot-assets/tapchannel"
 	"github.com/lightninglabs/taproot-assets/taprpc"
 	"github.com/lightningnetwork/lnd/cmd/commands"
@@ -149,42 +151,108 @@ func fundChannel(c *cli.Context) error {
 	return nil
 }
 
+type assetGenesis struct {
+	GenesisPoint string `json:"genesis_point"`
+	Name         string `json:"name"`
+	MetaHash     string `json:"meta_hash"`
+	AssetID      string `json:"asset_id"`
+}
+
+type assetUtxo struct {
+	Version      int64        `json:"version"`
+	AssetGenesis assetGenesis `json:"asset_genesis"`
+	Amount       int64        `json:"amount"`
+	ScriptKey    string       `json:"script_key"`
+}
+
+type AssetChanInfo struct {
+	AssetInfo     assetUtxo `json:"asset_utxo"`
+	Capacity      int64     `json:"capacity"`
+	LocalBalance  int64     `json:"local_balance"`
+	RemoteBalance int64     `json:"remote_balance"`
+}
+
+type assetChannelResp struct {
+	Assets []AssetChanInfo `json:"assets"`
+}
+
 func listChannelsResponseDecorator(c *cli.Context,
 	resp *lnrpc.ListChannelsResponse) error {
 
-	ctxb := context.Background()
 	for idx := range resp.Channels {
 		channel := resp.Channels[idx]
 
 		if len(channel.CustomChannelData) > 0 {
-			var openChannelRecord tapchannel.OpenChannel
-			err := openChannelRecord.Decode(bytes.NewReader(
+			chanDataReader := bytes.NewReader(
 				channel.CustomChannelData,
+			)
+
+			// The custom channel data is encoded as two var byte
+			// blobs. One for the static funding data, one for the
+			// state of our current local commitment.
+			openChanData, err := wire.ReadVarBytes(
+				chanDataReader, 0, 1_000_000, "chan data",
+			)
+			if err != nil {
+				return fmt.Errorf("unable to read open "+
+					"chan data: %v", err)
+			}
+			localCommitData, err := wire.ReadVarBytes(
+				chanDataReader, 0, 1_000_000, "commit data",
+			)
+			if err != nil {
+				return fmt.Errorf("unable to read open "+
+					"chan data: %v", err)
+			}
+
+			var openChannelRecord tapchannel.OpenChannel
+			err = openChannelRecord.Decode(bytes.NewReader(
+				openChanData,
 			))
 			if err != nil {
 				return fmt.Errorf("error decoding custom "+
 					"channel data: %w", err)
 			}
 
-			rpcAssetList := &taprpc.ListAssetResponse{}
+			var localCommit tapchannel.Commitment
+			err = localCommit.Decode(bytes.NewReader(
+				localCommitData,
+			))
+			if err != nil {
+				return fmt.Errorf("error decoding custom "+
+					"commit data: %w", err)
+			}
+
+			rpcAssetList := &assetChannelResp{}
 			for _, output := range openChannelRecord.Assets() {
-				rpcAsset, err := taprpc.MarshalAsset(
-					ctxb, &output.Proof.Val.Asset,
-					false, false, nil,
-				)
-				if err != nil {
-					return fmt.Errorf("error marshaling "+
-						"asset: %w", err)
+				chanAsset := output.Proof.Val.Asset
+
+				assetID := chanAsset.ID()
+				assetInfo := AssetChanInfo{
+					AssetInfo: assetUtxo{
+						Version: int64(chanAsset.Version),
+						AssetGenesis: assetGenesis{
+							GenesisPoint: chanAsset.FirstPrevOut.String(),
+							Name:         chanAsset.Tag,
+							MetaHash:     hex.EncodeToString(chanAsset.MetaHash[:]),
+							AssetID:      hex.EncodeToString(assetID[:]),
+						},
+						Amount: int64(chanAsset.Amount),
+						ScriptKey: hex.EncodeToString(
+							chanAsset.ScriptKey.PubKey.SerializeCompressed(),
+						),
+					},
+					Capacity:      int64(output.Amount.Val),
+					LocalBalance:  int64(localCommit.LocalAssets.Val.Sum()),
+					RemoteBalance: int64(localCommit.RemoteAssets.Val.Sum()),
 				}
 
 				rpcAssetList.Assets = append(
-					rpcAssetList.Assets, rpcAsset,
+					rpcAssetList.Assets, assetInfo,
 				)
 			}
 
-			jsonBytes, err := lnrpc.ProtoJSONMarshalOpts.Marshal(
-				rpcAssetList,
-			)
+			jsonBytes, err := json.Marshal(rpcAssetList)
 			if err != nil {
 				return fmt.Errorf("error marshaling custom "+
 					"channel data: %w", err)
