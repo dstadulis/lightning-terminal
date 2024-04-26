@@ -32,6 +32,35 @@ func copyCommand(command cli.Command, action interface{},
 	return command
 }
 
+var lnCommands = []cli.Command{
+	{
+		Name:     "ln",
+		Usage:    "Interact with the Lightning Network.",
+		Category: "Taproot Assets on LN",
+		Subcommands: []cli.Command{
+			fundChannelCommand,
+			copyCommand(
+				commands.ListChannelsCommand,
+				func(c *cli.Context) error {
+					return commands.ListChannels(
+						c,
+						listChannelsResponseDecorator,
+					)
+				},
+			),
+			copyCommand(
+				commands.ChannelBalanceCommand,
+				func(c *cli.Context) error {
+					return commands.ChannelBalance(
+						c,
+						channelBalanceResponseDecorator,
+					)
+				},
+			),
+		},
+	},
+}
+
 var fundChannelCommand = cli.Command{
 	Name:     "fundchannel",
 	Category: "Channels",
@@ -64,24 +93,46 @@ var fundChannelCommand = cli.Command{
 	Action: fundChannel,
 }
 
-var lnCommands = []cli.Command{
-	{
-		Name:     "ln",
-		Usage:    "Interact with the Lightning Network.",
-		Category: "Taproot Assets on LN",
-		Subcommands: []cli.Command{
-			fundChannelCommand,
-			copyCommand(
-				commands.ListChannelsCommand,
-				func(c *cli.Context) error {
-					return commands.ListChannels(
-						c,
-						listChannelsResponseDecorator,
-					)
-				},
-			),
-		},
-	},
+type customChanData struct {
+	openChan    tapchannel.OpenChannel
+	localCommit tapchannel.Commitment
+}
+
+func readCustomChanData(chanData []byte) (*customChanData, error) {
+	chanDataReader := bytes.NewReader(chanData)
+
+	// The custom channel data is encoded as two var byte blobs. One for
+	// the static funding data, one for the state of our current local
+	// commitment.
+	openChanData, err := wire.ReadVarBytes(
+		chanDataReader, 0, 1_000_000, "chan data",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read open chan data: %v", err)
+	}
+	localCommitData, err := wire.ReadVarBytes(
+		chanDataReader, 0, 1_000_000, "commit data",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read open chan data: %v", err)
+	}
+
+	var openChannelRecord tapchannel.OpenChannel
+	err = openChannelRecord.Decode(bytes.NewReader(openChanData))
+	if err != nil {
+		return nil, fmt.Errorf("error decoding custom channel data: %w", err)
+	}
+
+	var localCommit tapchannel.Commitment
+	err = localCommit.Decode(bytes.NewReader(localCommitData))
+	if err != nil {
+		return nil, fmt.Errorf("error decoding custom commit data: %w", err)
+	}
+
+	return &customChanData{
+		openChan:    openChannelRecord,
+		localCommit: localCommit,
+	}, nil
 }
 
 func fundChannel(c *cli.Context) error {
@@ -151,6 +202,101 @@ func fundChannel(c *cli.Context) error {
 	return nil
 }
 
+type AssetBalance struct {
+	AssetID       string `json:"asset_id"`
+	Name          string `json:"name"`
+	LocalBalance  int64  `json:"local_balance"`
+	RemoteBalance int64  `json:"remote_balance"`
+}
+
+type channelBalResp struct {
+	Assets map[string]*AssetBalance `json:"assets"`
+}
+
+func channelBalanceResponseDecorator(c *cli.Context,
+	resp *lnrpc.ChannelBalanceResponse) error {
+
+	// For the channel balance, we'll hit ListChannels ourselves, then use
+	// all the blobs to sum up a total balance for each asset across all
+	// channels.
+	lndConn, cleanup, err := connectClient(c, false)
+	if err != nil {
+		return fmt.Errorf("unable to make rpc con: %w", err)
+	}
+
+	defer cleanup()
+
+	ctxb := context.Background()
+
+	lndClient := lnrpc.NewLightningClient(lndConn)
+	openChans, err := lndClient.ListChannels(
+		ctxb, &lnrpc.ListChannelsRequest{},
+	)
+	if err != nil {
+		return fmt.Errorf("unable to fetch channels: %w", err)
+	}
+
+	balanceResp := channelBalResp{
+		Assets: make(map[string]*AssetBalance),
+	}
+	for _, openChan := range openChans.Channels {
+		if len(openChan.CustomChannelData) == 0 {
+			continue
+		}
+
+		assetData, err := readCustomChanData(openChan.CustomChannelData)
+		if err != nil {
+			return err
+		}
+
+		for _, assetOutput := range assetData.localCommit.LocalOutputs() {
+			assetID := assetOutput.Proof.Val.Asset.ID()
+
+			assetIDStr := hex.EncodeToString(assetID[:])
+			assetName := assetOutput.Proof.Val.Asset.Tag
+
+			assetBalance, ok := balanceResp.Assets[assetIDStr]
+			if !ok {
+				assetBalance = &AssetBalance{
+					AssetID: assetIDStr,
+					Name:    assetName,
+				}
+				balanceResp.Assets[assetIDStr] = assetBalance
+			}
+
+			assetBalance.LocalBalance += int64(assetOutput.Amount.Val)
+		}
+
+		for _, assetOutput := range assetData.localCommit.RemoteOutputs() {
+			assetID := assetOutput.Proof.Val.Asset.ID()
+
+			assetIDStr := hex.EncodeToString(assetID[:])
+			assetName := assetOutput.Proof.Val.Asset.Tag
+
+			assetBalance, ok := balanceResp.Assets[assetIDStr]
+			if !ok {
+				assetBalance = &AssetBalance{
+					AssetID: assetIDStr,
+					Name:    assetName,
+				}
+				balanceResp.Assets[assetIDStr] = assetBalance
+			}
+
+			assetBalance.RemoteBalance += int64(assetOutput.Amount.Val)
+		}
+	}
+
+	jsonBytes, err := json.Marshal(balanceResp)
+	if err != nil {
+		return fmt.Errorf("error marshaling custom "+
+			"channel data: %w", err)
+	}
+
+	resp.CustomChannelData = jsonBytes
+
+	return nil
+}
+
 type assetGenesis struct {
 	GenesisPoint string `json:"genesis_point"`
 	Name         string `json:"name"`
@@ -183,45 +329,16 @@ func listChannelsResponseDecorator(c *cli.Context,
 		channel := resp.Channels[idx]
 
 		if len(channel.CustomChannelData) > 0 {
-			chanDataReader := bytes.NewReader(
+
+			assetData, err := readCustomChanData(
 				channel.CustomChannelData,
 			)
-
-			// The custom channel data is encoded as two var byte
-			// blobs. One for the static funding data, one for the
-			// state of our current local commitment.
-			openChanData, err := wire.ReadVarBytes(
-				chanDataReader, 0, 1_000_000, "chan data",
-			)
 			if err != nil {
-				return fmt.Errorf("unable to read open "+
-					"chan data: %v", err)
-			}
-			localCommitData, err := wire.ReadVarBytes(
-				chanDataReader, 0, 1_000_000, "commit data",
-			)
-			if err != nil {
-				return fmt.Errorf("unable to read open "+
-					"chan data: %v", err)
+				return err
 			}
 
-			var openChannelRecord tapchannel.OpenChannel
-			err = openChannelRecord.Decode(bytes.NewReader(
-				openChanData,
-			))
-			if err != nil {
-				return fmt.Errorf("error decoding custom "+
-					"channel data: %w", err)
-			}
-
-			var localCommit tapchannel.Commitment
-			err = localCommit.Decode(bytes.NewReader(
-				localCommitData,
-			))
-			if err != nil {
-				return fmt.Errorf("error decoding custom "+
-					"commit data: %w", err)
-			}
+			localCommit := assetData.localCommit
+			openChannelRecord := assetData.openChan
 
 			rpcAssetList := &assetChannelResp{}
 			for _, output := range openChannelRecord.Assets() {
