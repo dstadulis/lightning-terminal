@@ -3,15 +3,22 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/btcsuite/btcd/wire"
+	"github.com/lightninglabs/taproot-assets/asset"
 	"github.com/lightninglabs/taproot-assets/tapchannel"
 	"github.com/lightninglabs/taproot-assets/taprpc"
 	"github.com/lightningnetwork/lnd/cmd/commands"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
+	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/lightningnetwork/lnd/record"
+	"github.com/lightningnetwork/lnd/tlv"
 	"github.com/urfave/cli"
 )
 
@@ -39,6 +46,7 @@ var lnCommands = []cli.Command{
 		Category: "Taproot Assets on LN",
 		Subcommands: []cli.Command{
 			fundChannelCommand,
+			sendPaymentCommand,
 			copyCommand(
 				commands.ListChannelsCommand,
 				func(c *cli.Context) error {
@@ -213,30 +221,16 @@ type channelBalResp struct {
 	Assets map[string]*AssetBalance `json:"assets"`
 }
 
-func channelBalanceResponseDecorator(c *cli.Context,
-	resp *lnrpc.ChannelBalanceResponse) error {
-
-	// For the channel balance, we'll hit ListChannels ourselves, then use
-	// all the blobs to sum up a total balance for each asset across all
-	// channels.
-	lndConn, cleanup, err := connectClient(c, false)
-	if err != nil {
-		return fmt.Errorf("unable to make rpc con: %w", err)
-	}
-
-	defer cleanup()
-
+func computeAssetBalances(lnd lnrpc.LightningClient) (*channelBalResp, error) {
 	ctxb := context.Background()
-
-	lndClient := lnrpc.NewLightningClient(lndConn)
-	openChans, err := lndClient.ListChannels(
+	openChans, err := lnd.ListChannels(
 		ctxb, &lnrpc.ListChannelsRequest{},
 	)
 	if err != nil {
-		return fmt.Errorf("unable to fetch channels: %w", err)
+		return nil, fmt.Errorf("unable to fetch channels: %w", err)
 	}
 
-	balanceResp := channelBalResp{
+	balanceResp := &channelBalResp{
 		Assets: make(map[string]*AssetBalance),
 	}
 	for _, openChan := range openChans.Channels {
@@ -246,7 +240,7 @@ func channelBalanceResponseDecorator(c *cli.Context,
 
 		assetData, err := readCustomChanData(openChan.CustomChannelData)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		for _, assetOutput := range assetData.localCommit.LocalOutputs() {
@@ -284,6 +278,29 @@ func channelBalanceResponseDecorator(c *cli.Context,
 
 			assetBalance.RemoteBalance += int64(assetOutput.Amount.Val)
 		}
+	}
+
+	return balanceResp, nil
+}
+
+func channelBalanceResponseDecorator(c *cli.Context,
+	resp *lnrpc.ChannelBalanceResponse) error {
+
+	// For the channel balance, we'll hit ListChannels ourselves, then use
+	// all the blobs to sum up a total balance for each asset across all
+	// channels.
+	lndConn, cleanup, err := connectClient(c, false)
+	if err != nil {
+		return fmt.Errorf("unable to make rpc con: %w", err)
+	}
+
+	defer cleanup()
+
+	lndClient := lnrpc.NewLightningClient(lndConn)
+
+	balanceResp, err := computeAssetBalances(lndClient)
+	if err != nil {
+		return fmt.Errorf("unable to compute asset balances: %w", err)
 	}
 
 	jsonBytes, err := json.Marshal(balanceResp)
@@ -380,4 +397,154 @@ func listChannelsResponseDecorator(c *cli.Context,
 	}
 
 	return nil
+}
+
+var (
+	assetIDFlag = cli.StringFlag{
+		Name: "asset_id",
+		Usage: "the asset ID of the asset to use when sending " +
+			"payments with assets",
+	}
+)
+
+var sendPaymentCommand = cli.Command{
+	Name:     "sendpayment",
+	Category: commands.SendPaymentCommand.Category,
+	Usage: "Send a payment over Lightning, potentially using a " +
+		"mulit-asset channel as the first hop",
+	Description: commands.SendPaymentCommand.Description + `
+	To send an multi-asset LN payment to a single hop, the --asset_id=X
+	argument should be used.
+
+	Note that this will only work in concert with the --keysend argument.
+	`,
+	ArgsUsage: commands.SendPaymentCommand.ArgsUsage + "asset_id=X",
+	Flags:     append(commands.SendPaymentCommand.Flags, assetIDFlag),
+	Action:    sendPayment,
+}
+
+func sendPayment(ctx *cli.Context) error {
+	// Show command help if no arguments provided
+	if ctx.NArg() == 0 && ctx.NumFlags() == 0 {
+		_ = cli.ShowCommandHelp(ctx, "sendpayment")
+		return nil
+	}
+
+	lndConn, cleanup, err := connectClient(ctx, false)
+	if err != nil {
+		return fmt.Errorf("unable to make rpc con: %w", err)
+	}
+
+	defer cleanup()
+
+	lndClient := lnrpc.NewLightningClient(lndConn)
+
+	switch {
+	case !ctx.IsSet(assetIDFlag.Name):
+		return fmt.Errorf("--asset_id flag must be set!")
+	case !ctx.IsSet("keysend"):
+		return fmt.Errorf("--keysend flag must be set!")
+	case !ctx.IsSet("amt"):
+		return fmt.Errorf("--amt must be set")
+	}
+
+	assetIDStr := ctx.String(assetIDFlag.Name)
+
+	assetIDBytes, err := hex.DecodeString(assetIDStr)
+	if err != nil {
+		return fmt.Errorf("unable to decode assetID: %v", err)
+	}
+
+	// First, based on the asset ID and amount, we'll make sure that this
+	// channel even has enough funds to send.
+	assetBalances, err := computeAssetBalances(lndClient)
+	if err != nil {
+		return fmt.Errorf("unable to compute asset balances: %w", err)
+	}
+
+	assetBalance, ok := assetBalances.Assets[assetIDStr]
+	if !ok {
+		return fmt.Errorf("unable to send asset_id=%v, not in "+
+			"channel", assetIDStr)
+	}
+
+	amtToSend := ctx.Int64("amt")
+	if amtToSend > assetBalance.LocalBalance {
+		return fmt.Errorf("insufficient balance, want to send %v, "+
+			"only have %v", amtToSend, assetBalance.LocalBalance)
+	}
+
+	var assetID asset.ID
+	copy(assetID[:], assetIDBytes)
+
+	// Now that we know the amount we need to send, we'll convert that into
+	// an HTLC tlv, which'll be used as the first hop TLV value.
+	assetAmts := []*tapchannel.AssetBalance{
+		tapchannel.NewAssetBalance(assetID, uint64(amtToSend)),
+	}
+
+	htlc := tapchannel.NewHtlc(assetAmts)
+
+	// We'll now map the HTLC struct into a set of TLV records, which we
+	// can then encode into the map format expected.  htlcRecords :=
+	// htlc.Records()
+	htlcMapRecords, err := tlv.RecordsToMap(htlc.Records())
+	if err != nil {
+		return fmt.Errorf("unable to encode records as map: %w", err)
+	}
+
+	// With the asset specific work out of the way, we'll parse the rest of
+	// the command as normal.
+	var (
+		destNode []byte
+		rHash    []byte
+	)
+
+	switch {
+	case ctx.IsSet("dest"):
+		destNode, err = hex.DecodeString(ctx.String("dest"))
+	default:
+		return fmt.Errorf("destination txid argument missing")
+	}
+	if err != nil {
+		return err
+	}
+
+	if len(destNode) != 33 {
+		return fmt.Errorf("dest node pubkey must be exactly 33 bytes, is "+
+			"instead: %v", len(destNode))
+	}
+
+	// We use a constant amount of 500 to carry the asset HTLCs. In the
+	// future, we can use the double HTLC trick here, though it consumes
+	// more commitment space.
+	const htlcCarrierAmt = 500
+	req := &routerrpc.SendPaymentRequest{
+		Dest:                  destNode,
+		Amt:                   htlcCarrierAmt,
+		DestCustomRecords:     make(map[uint64][]byte),
+		FirstHopCustomRecords: htlcMapRecords,
+	}
+
+	if ctx.IsSet("payment_hash") {
+		return errors.New("cannot set payment hash when using " +
+			"keysend")
+	}
+
+	// Read out the custom preimage for the keysend payment.
+	var preimage lntypes.Preimage
+	if _, err := rand.Read(preimage[:]); err != nil {
+		return err
+	}
+
+	// Set the preimage. If the user supplied a preimage with the data
+	// flag, the preimage that is set here will be overwritten later.
+	req.DestCustomRecords[record.KeySendType] = preimage[:]
+
+	hash := preimage.Hash()
+	rHash = hash[:]
+
+	req.PaymentHash = rHash
+
+	return commands.SendPaymentRequest(ctx, req)
 }
