@@ -4,5 +4,5 @@ use (
 	.
 	../../lightningnetwork/lnd
 	../../lightningnetwork/lnd/tlv
-	../taro
+	../taproot-assets
 )
