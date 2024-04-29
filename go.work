@@ -1,0 +1,8 @@
+go 1.22.2
+
+use (
+	.
+	../../lightningnetwork/lnd
+	../../lightningnetwork/lnd/tlv
+	../taro
+)

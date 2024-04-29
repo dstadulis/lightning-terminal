@@ -1,7 +1,7 @@
 module github.com/lightninglabs/lightning-terminal
 
 require (
-	github.com/btcsuite/btcd v0.24.1-0.20240318151728-2fc99e0496d2
+	github.com/btcsuite/btcd v0.24.2-beta.rc1.0.20240403021926-ae5533602c46
 	github.com/btcsuite/btcd/btcec/v2 v2.3.2
 	github.com/btcsuite/btcd/btcutil v1.1.5
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0
@@ -23,7 +23,7 @@ require (
 	github.com/lightningnetwork/lnd v0.17.4-beta
 	github.com/lightningnetwork/lnd/cert v1.2.2
 	github.com/lightningnetwork/lnd/fn v1.0.5
-	github.com/lightningnetwork/lnd/kvdb v1.4.5
+	github.com/lightningnetwork/lnd/kvdb v1.4.6
 	github.com/lightningnetwork/lnd/tlv v1.2.3
 	github.com/lightningnetwork/lnd/tor v1.1.2
 	github.com/mwitkow/go-conntrack v0.0.0-20190716064945-2f068394615f
@@ -49,10 +49,9 @@ require (
 	github.com/Yawning/aez v0.0.0-20211027044916-e49e68abd344 // indirect
 	github.com/aead/chacha20 v0.0.0-20180709150244-8b13a72661da // indirect
 	github.com/aead/siphash v1.0.1 // indirect
-	github.com/andybalholm/brotli v1.0.4 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/btcsuite/btcd/btcutil/psbt v1.1.8 // indirect
-	github.com/btcsuite/btcwallet v0.16.10-0.20240318155207-9a7dd2416f4d // indirect
+	github.com/btcsuite/btcwallet v0.16.10-0.20240410030101-6fe19a472a62 // indirect
 	github.com/btcsuite/btcwallet/wallet/txauthor v1.3.4 // indirect
 	github.com/btcsuite/btcwallet/wallet/txrules v1.2.1 // indirect
 	github.com/btcsuite/btcwallet/wallet/txsizes v1.2.4 // indirect
@@ -131,7 +130,7 @@ require (
 	github.com/lightninglabs/neutrino/cache v1.1.2 // indirect
 	github.com/lightningnetwork/lightning-onion v1.2.1-0.20230823005744-06182b1d7d2f // indirect
 	github.com/lightningnetwork/lnd/clock v1.1.1 // indirect
-	github.com/lightningnetwork/lnd/healthcheck v1.2.3 // indirect
+	github.com/lightningnetwork/lnd/healthcheck v1.2.4 // indirect
 	github.com/lightningnetwork/lnd/queue v1.1.1 // indirect
 	github.com/lightningnetwork/lnd/ticker v1.1.1 // indirect
 	github.com/ltcsuite/ltcd v0.0.0-20190101042124-f37f8bf35796 // indirect
@@ -229,11 +228,17 @@ replace github.com/lightninglabs/loop => github.com/lightninglabs/loop v0.28.0-b
 
 replace github.com/btcsuite/btcwallet => github.com/btcsuite/btcwallet v0.16.10-0.20240305014015-f7c216e78ee8
 
-replace github.com/lightninglabs/taproot-assets => github.com/lightninglabs/taproot-assets v0.3.3-0.20240420025845-df4530ebb82d
+// replace github.com/lightninglabs/taproot-assets => github.com/lightninglabs/taproot-assets v0.3.3-0.20240420025845-df4530ebb82d
 
-replace github.com/lightningnetwork/lnd => github.com/lightningnetwork/lnd v0.17.0-beta.rc6.0.20240419014805-cb514a1a570d
+// replace github.com/lightninglabs/taproot-assets => ../taro
 
-replace github.com/lightningnetwork/lnd/tlv => github.com/lightningnetwork/lnd/tlv v1.2.4-0.20240418182330-c93035cf33ca
+// replace github.com/lightningnetwork/lnd => github.com/lightningnetwork/lnd v0.17.0-beta.rc6.0.20240419014805-cb514a1a570d
+
+// replace github.com/lightningnetwork/lnd => ../../lightningnetwork/lnd
+
+// replace github.com/lightningnetwork/lnd/tlv => github.com/lightningnetwork/lnd/tlv v1.2.4-0.20240418182330-c93035cf33ca
+
+// replace github.com/lightningnetwork/lnd/tlv => ../../lightningnetwork/lnd/tlv
 
 go 1.22
 
