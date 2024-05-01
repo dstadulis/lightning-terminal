@@ -483,7 +483,7 @@ func sendPayment(ctx *cli.Context) error {
 		tapchannel.NewAssetBalance(assetID, uint64(amtToSend)),
 	}
 
-	htlc := tapchannel.NewHtlc(assetAmts)
+	htlc := tapchannel.NewHtlc(assetAmts, tapchannel.NoneRfqID())
 
 	// We'll now map the HTLC struct into a set of TLV records, which we
 	// can then encode into the map format expected.  htlcRecords :=
