@@ -11,8 +11,10 @@ import (
 
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightninglabs/taproot-assets/asset"
+	"github.com/lightninglabs/taproot-assets/rfqmsg"
 	"github.com/lightninglabs/taproot-assets/tapchannel"
 	"github.com/lightninglabs/taproot-assets/taprpc"
+	"github.com/lightninglabs/taproot-assets/taprpc/rfqrpc"
 	"github.com/lightningnetwork/lnd/cmd/commands"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
@@ -65,6 +67,7 @@ var lnCommands = []cli.Command{
 					)
 				},
 			),
+			payInvoiceCommand,
 		},
 	},
 }
@@ -213,8 +216,10 @@ func fundChannel(c *cli.Context) error {
 type AssetBalance struct {
 	AssetID       string `json:"asset_id"`
 	Name          string `json:"name"`
-	LocalBalance  int64  `json:"local_balance"`
-	RemoteBalance int64  `json:"remote_balance"`
+	LocalBalance  uint64 `json:"local_balance"`
+	RemoteBalance uint64 `json:"remote_balance"`
+	channelID     uint64
+	peerPubKey    string
 }
 
 type channelBalResp struct {
@@ -252,13 +257,15 @@ func computeAssetBalances(lnd lnrpc.LightningClient) (*channelBalResp, error) {
 			assetBalance, ok := balanceResp.Assets[assetIDStr]
 			if !ok {
 				assetBalance = &AssetBalance{
-					AssetID: assetIDStr,
-					Name:    assetName,
+					AssetID:    assetIDStr,
+					Name:       assetName,
+					channelID:  openChan.ChanId,
+					peerPubKey: openChan.RemotePubkey,
 				}
 				balanceResp.Assets[assetIDStr] = assetBalance
 			}
 
-			assetBalance.LocalBalance += int64(assetOutput.Amount.Val)
+			assetBalance.LocalBalance += assetOutput.Amount.Val
 		}
 
 		for _, assetOutput := range assetData.localCommit.RemoteOutputs() {
@@ -276,7 +283,7 @@ func computeAssetBalances(lnd lnrpc.LightningClient) (*channelBalResp, error) {
 				balanceResp.Assets[assetIDStr] = assetBalance
 			}
 
-			assetBalance.RemoteBalance += int64(assetOutput.Amount.Val)
+			assetBalance.RemoteBalance += assetOutput.Amount.Val
 		}
 	}
 
@@ -418,7 +425,7 @@ var sendPaymentCommand = cli.Command{
 
 	Note that this will only work in concert with the --keysend argument.
 	`,
-	ArgsUsage: commands.SendPaymentCommand.ArgsUsage + "asset_id=X",
+	ArgsUsage: commands.SendPaymentCommand.ArgsUsage + " --asset_id=X",
 	Flags:     append(commands.SendPaymentCommand.Flags, assetIDFlag),
 	Action:    sendPayment,
 }
@@ -441,9 +448,9 @@ func sendPayment(ctx *cli.Context) error {
 
 	switch {
 	case !ctx.IsSet(assetIDFlag.Name):
-		return fmt.Errorf("--asset_id flag must be set!")
+		return fmt.Errorf("the --asset_id flag must be set")
 	case !ctx.IsSet("keysend"):
-		return fmt.Errorf("--keysend flag must be set!")
+		return fmt.Errorf("the --keysend flag must be set")
 	case !ctx.IsSet("amt"):
 		return fmt.Errorf("--amt must be set")
 	}
@@ -468,7 +475,7 @@ func sendPayment(ctx *cli.Context) error {
 			"channel", assetIDStr)
 	}
 
-	amtToSend := ctx.Int64("amt")
+	amtToSend := ctx.Uint64("amt")
 	if amtToSend > assetBalance.LocalBalance {
 		return fmt.Errorf("insufficient balance, want to send %v, "+
 			"only have %v", amtToSend, assetBalance.LocalBalance)
@@ -480,14 +487,13 @@ func sendPayment(ctx *cli.Context) error {
 	// Now that we know the amount we need to send, we'll convert that into
 	// an HTLC tlv, which'll be used as the first hop TLV value.
 	assetAmts := []*tapchannel.AssetBalance{
-		tapchannel.NewAssetBalance(assetID, uint64(amtToSend)),
+		tapchannel.NewAssetBalance(assetID, amtToSend),
 	}
 
 	htlc := tapchannel.NewHtlc(assetAmts, tapchannel.NoneRfqID())
 
 	// We'll now map the HTLC struct into a set of TLV records, which we
-	// can then encode into the map format expected.  htlcRecords :=
-	// htlc.Records()
+	// can then encode into the map format expected.
 	htlcMapRecords, err := tlv.RecordsToMap(htlc.Records())
 	if err != nil {
 		return fmt.Errorf("unable to encode records as map: %w", err)
@@ -545,6 +551,150 @@ func sendPayment(ctx *cli.Context) error {
 	rHash = hash[:]
 
 	req.PaymentHash = rHash
+
+	return commands.SendPaymentRequest(ctx, req)
+}
+
+var payInvoiceCommand = cli.Command{
+	Name:     "payinvoice",
+	Category: "Payments",
+	Usage:    "Pay an invoice over lightning using an asset.",
+	Description: `
+	This command attempts to pay an invoice using an asset channel as the
+	source of the payment. The asset ID of the channel must be specified
+	using the --asset_id flag.
+	`,
+	ArgsUsage: "pay_req --asset_id=X",
+	Flags: append(commands.PaymentFlags(),
+		cli.Int64Flag{
+			Name: "amt",
+			Usage: "(optional) number of satoshis to fulfill the " +
+				"invoice",
+		},
+		assetIDFlag,
+	),
+	Action: payInvoice,
+}
+
+func payInvoice(ctx *cli.Context) error {
+	args := ctx.Args()
+	ctxb := context.Background()
+
+	var payReq string
+	switch {
+	case ctx.IsSet("pay_req"):
+		payReq = ctx.String("pay_req")
+	case args.Present():
+		payReq = args.First()
+	default:
+		return fmt.Errorf("pay_req argument missing")
+	}
+
+	lndConn, cleanup, err := connectClient(ctx, false)
+	if err != nil {
+		return fmt.Errorf("unable to make rpc con: %w", err)
+	}
+
+	defer cleanup()
+
+	lndClient := lnrpc.NewLightningClient(lndConn)
+
+	decodeReq := &lnrpc.PayReqString{PayReq: payReq}
+	decodeResp, err := lndClient.DecodePayReq(ctxb, decodeReq)
+	if err != nil {
+		return err
+	}
+
+	if !ctx.IsSet(assetIDFlag.Name) {
+		return fmt.Errorf("the --asset_id flag must be set")
+	}
+
+	assetIDStr := ctx.String(assetIDFlag.Name)
+
+	assetIDBytes, err := hex.DecodeString(assetIDStr)
+	if err != nil {
+		return fmt.Errorf("unable to decode assetID: %v", err)
+	}
+
+	// First, based on the asset ID and amount, we'll make sure that this
+	// channel even has enough funds to send.
+	assetBalances, err := computeAssetBalances(lndClient)
+	if err != nil {
+		return fmt.Errorf("unable to compute asset balances: %w", err)
+	}
+
+	assetBalance, ok := assetBalances.Assets[assetIDStr]
+	if !ok {
+		return fmt.Errorf("unable to send asset_id=%v, not in "+
+			"channel", assetIDStr)
+	}
+
+	if assetBalance.LocalBalance == 0 {
+		return fmt.Errorf("no asset balance available for asset_id=%v",
+			assetIDStr)
+	}
+
+	var assetID asset.ID
+	copy(assetID[:], assetIDBytes)
+
+	tapdConn, cleanup, err := connectTapdClient(ctx)
+	if err != nil {
+		return fmt.Errorf("error creating tapd connection: %w", err)
+	}
+
+	defer cleanup()
+
+	peerPubKey, err := hex.DecodeString(assetBalance.peerPubKey)
+	if err != nil {
+		return fmt.Errorf("unable to decode peer pubkey: %w", err)
+	}
+
+	rfqClient := rfqrpc.NewRfqClient(tapdConn)
+
+	timeoutSeconds := uint32(60)
+	fmt.Printf("Asking peer %x for quote to sell assets to pay for "+
+		"invoice over %d msats; waiting up to %ds\n", peerPubKey,
+		decodeResp.NumMsat, timeoutSeconds)
+
+	resp, err := rfqClient.AddAssetSellOrder(
+		ctxb, &rfqrpc.AddAssetSellOrderRequest{
+			AssetSpecifier: &rfqrpc.AssetSpecifier{
+				Id: &rfqrpc.AssetSpecifier_AssetIdStr{
+					AssetIdStr: assetIDStr,
+				},
+			},
+			MaxAssetAmount: assetBalance.LocalBalance,
+			MinAsk:         uint64(decodeResp.NumMsat),
+			Expiry:         uint64(decodeResp.Expiry),
+			PeerPubKey:     peerPubKey,
+			TimeoutSeconds: timeoutSeconds,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("error adding sell order: %w", err)
+	}
+
+	msatPerUnit := resp.AcceptedQuote.BidPrice
+	numUnits := uint64(decodeResp.NumMsat) / msatPerUnit
+
+	fmt.Printf("Got quote for %v asset units at %v msat/unit from peer "+
+		"%x\n", numUnits, msatPerUnit, peerPubKey)
+
+	var rfqID rfqmsg.ID
+	copy(rfqID[:], resp.AcceptedQuote.Id)
+	htlc := tapchannel.NewHtlc(nil, tapchannel.SomeRfqID(rfqID))
+
+	// We'll now map the HTLC struct into a set of TLV records, which we
+	// can then encode into the map format expected.
+	htlcMapRecords, err := tlv.RecordsToMap(htlc.Records())
+	if err != nil {
+		return fmt.Errorf("unable to encode records as map: %w", err)
+	}
+
+	req := &routerrpc.SendPaymentRequest{
+		PaymentRequest:        commands.StripPrefix(payReq),
+		FirstHopCustomRecords: htlcMapRecords,
+	}
 
 	return commands.SendPaymentRequest(ctx, req)
 }

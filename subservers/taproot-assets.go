@@ -11,6 +11,7 @@ import (
 	"github.com/lightninglabs/taproot-assets/taprpc"
 	"github.com/lightninglabs/taproot-assets/taprpc/assetwalletrpc"
 	"github.com/lightninglabs/taproot-assets/taprpc/mintrpc"
+	"github.com/lightninglabs/taproot-assets/taprpc/rfqrpc"
 	"github.com/lightninglabs/taproot-assets/taprpc/universerpc"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"google.golang.org/grpc"
@@ -107,6 +108,7 @@ func (t *taprootAssetsSubServer) RegisterGrpcService(
 	taprpc.RegisterTaprootAssetsServer(registrar, t)
 	mintrpc.RegisterMintServer(registrar, t)
 	assetwalletrpc.RegisterAssetWalletServer(registrar, t)
+	rfqrpc.RegisterRfqServer(registrar, t)
 	universerpc.RegisterUniverseServer(registrar, t)
 }
 
@@ -133,6 +135,13 @@ func (t *taprootAssetsSubServer) RegisterRestService(ctx context.Context,
 	}
 
 	err = assetwalletrpc.RegisterAssetWalletHandlerFromEndpoint(
+		ctx, mux, endpoint, dialOpts,
+	)
+	if err != nil {
+		return err
+	}
+
+	err = rfqrpc.RegisterRfqHandlerFromEndpoint(
 		ctx, mux, endpoint, dialOpts,
 	)
 	if err != nil {
