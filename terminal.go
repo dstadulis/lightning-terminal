@@ -55,6 +55,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnwallet/btcwallet"
 	"github.com/lightningnetwork/lnd/macaroons"
 	"github.com/lightningnetwork/lnd/protofsm"
+	"github.com/lightningnetwork/lnd/routing"
 	"github.com/lightningnetwork/lnd/rpcperms"
 	"github.com/lightningnetwork/lnd/signal"
 	grpcProxy "github.com/mwitkow/grpc-proxy/proxy"
@@ -1276,7 +1277,8 @@ func (g *LightningTerminal) buildAuxComponents() (*lnd.AuxComponents, error) {
 		AuxFundingController: fn.Some[funding.AuxFundingController](
 			tapd,
 		),
-		AuxSigner: fn.Some[lnwallet.AuxSigner](tapd),
+		AuxSigner:     fn.Some[lnwallet.AuxSigner](tapd),
+		TrafficShaper: fn.Some[routing.TlvTrafficShaper](tapd),
 	}, nil
 }
 

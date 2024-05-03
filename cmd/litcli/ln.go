@@ -678,7 +678,8 @@ func payInvoice(ctx *cli.Context) error {
 	numUnits := uint64(decodeResp.NumMsat) / msatPerUnit
 
 	fmt.Printf("Got quote for %v asset units at %v msat/unit from peer "+
-		"%x\n", numUnits, msatPerUnit, peerPubKey)
+		"%x with SCID %d\n", numUnits, msatPerUnit, peerPubKey,
+		resp.AcceptedQuote.Scid)
 
 	var rfqID rfqmsg.ID
 	copy(rfqID[:], resp.AcceptedQuote.Id)
