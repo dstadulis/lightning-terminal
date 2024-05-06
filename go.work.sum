@@ -697,6 +697,7 @@ github.com/lib/pq v1.10.7/go.mod h1:AlVN5x4E4T544tWzH6hKfbfQvm3HdbOxrmggDNAPY9o=
 github.com/lightninglabs/aperture v0.1.20-beta/go.mod h1:81OL9AHa8Wjm1HzRqTa6jkcafyaxJAsHZDIG5jj6RlU=
 github.com/lightninglabs/lndclient v0.16.0-10/go.mod h1:mqY0znSNa+M40HZowwKfno29RyZnmxoqo++BlYP82EY=
 github.com/lightninglabs/lndclient v1.0.1-0.20240503151254-cc0f64d75ef9/go.mod h1:u4tCE47cmULVr+aJM9SpcG5JNCw8HOPwpCPjFRoM1HY=
+github.com/lightninglabs/lndclient v1.0.1-0.20240503153803-36085f46e73f/go.mod h1:dxELF8Op5opFYPkL6ojpFHgz7wnTT9Ik0NsLifXBOC0=
 github.com/lightninglabs/neutrino v0.15.0/go.mod h1:pmjwElN/091TErtSE9Vd5W4hpxoG2/+xlb+HoPm9Gug=
 github.com/lightninglabs/neutrino/cache v1.1.0/go.mod h1:XJNcgdOw1LQnanGjw8Vj44CvguYA25IMKjWFZczwZuo=
 github.com/lightninglabs/neutrino/cache v1.1.1/go.mod h1:XJNcgdOw1LQnanGjw8Vj44CvguYA25IMKjWFZczwZuo=

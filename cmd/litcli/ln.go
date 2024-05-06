@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"time"
 
-	"github.com/btcsuite/btcd/wire"
 	"github.com/lightninglabs/taproot-assets/asset"
 	"github.com/lightninglabs/taproot-assets/rfqmsg"
 	"github.com/lightninglabs/taproot-assets/tapchannel"
@@ -18,6 +20,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/record"
 	"github.com/lightningnetwork/lnd/tlv"
 	"github.com/urfave/cli"
@@ -49,6 +52,7 @@ var lnCommands = []cli.Command{
 			fundChannelCommand,
 			sendPaymentCommand,
 			payInvoiceCommand,
+			addInvoiceCommand,
 		},
 	},
 }
@@ -83,48 +87,6 @@ var fundChannelCommand = cli.Command{
 		},
 	},
 	Action: fundChannel,
-}
-
-type customChanData struct {
-	openChan    tapchannel.OpenChannel
-	localCommit tapchannel.Commitment
-}
-
-func readCustomChanData(chanData []byte) (*customChanData, error) {
-	chanDataReader := bytes.NewReader(chanData)
-
-	// The custom channel data is encoded as two var byte blobs. One for
-	// the static funding data, one for the state of our current local
-	// commitment.
-	openChanData, err := wire.ReadVarBytes(
-		chanDataReader, 0, 1_000_000, "chan data",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("unable to read open chan data: %v", err)
-	}
-	localCommitData, err := wire.ReadVarBytes(
-		chanDataReader, 0, 1_000_000, "commit data",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("unable to read open chan data: %v", err)
-	}
-
-	var openChannelRecord tapchannel.OpenChannel
-	err = openChannelRecord.Decode(bytes.NewReader(openChanData))
-	if err != nil {
-		return nil, fmt.Errorf("error decoding custom channel data: %w", err)
-	}
-
-	var localCommit tapchannel.Commitment
-	err = localCommit.Decode(bytes.NewReader(localCommitData))
-	if err != nil {
-		return nil, fmt.Errorf("error decoding custom commit data: %w", err)
-	}
-
-	return &customChanData{
-		openChan:    openChannelRecord,
-		localCommit: localCommit,
-	}, nil
 }
 
 func fundChannel(c *cli.Context) error {
@@ -224,47 +186,30 @@ func computeAssetBalances(lnd lnrpc.LightningClient) (*channelBalResp, error) {
 			continue
 		}
 
-		assetData, err := readCustomChanData(openChan.CustomChannelData)
+		var assetData tapchannel.JsonAssetChannel
+		err = json.Unmarshal(openChan.CustomChannelData, &assetData)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("unable to unmarshal asset "+
+				"data: %w", err)
 		}
 
-		for _, assetOutput := range assetData.localCommit.LocalOutputs() {
-			assetID := assetOutput.Proof.Val.Asset.ID()
+		for _, assetOutput := range assetData.Assets {
+			assetID := assetOutput.AssetInfo.AssetGenesis.AssetID
+			assetName := assetOutput.AssetInfo.AssetGenesis.Name
 
-			assetIDStr := hex.EncodeToString(assetID[:])
-			assetName := assetOutput.Proof.Val.Asset.Tag
-
-			balance, ok := balanceResp.Assets[assetIDStr]
+			balance, ok := balanceResp.Assets[assetID]
 			if !ok {
 				balance = &assetBalance{
-					AssetID:    assetIDStr,
+					AssetID:    assetID,
 					Name:       assetName,
 					ChannelID:  openChan.ChanId,
 					PeerPubKey: openChan.RemotePubkey,
 				}
-				balanceResp.Assets[assetIDStr] = balance
+				balanceResp.Assets[assetID] = balance
 			}
 
-			balance.LocalBalance += assetOutput.Amount.Val
-		}
-
-		for _, assetOutput := range assetData.localCommit.RemoteOutputs() {
-			assetID := assetOutput.Proof.Val.Asset.ID()
-
-			assetIDStr := hex.EncodeToString(assetID[:])
-			assetName := assetOutput.Proof.Val.Asset.Tag
-
-			balance, ok := balanceResp.Assets[assetIDStr]
-			if !ok {
-				balance = &assetBalance{
-					AssetID: assetIDStr,
-					Name:    assetName,
-				}
-				balanceResp.Assets[assetIDStr] = balance
-			}
-
-			balance.RemoteBalance += assetOutput.Amount.Val
+			balance.LocalBalance += assetOutput.LocalBalance
+			balance.RemoteBalance += assetOutput.RemoteBalance
 		}
 	}
 
@@ -563,4 +508,176 @@ func payInvoice(ctx *cli.Context) error {
 	}
 
 	return commands.SendPaymentRequest(ctx, req)
+}
+
+var addInvoiceCommand = cli.Command{
+	Name:     "addinvoice",
+	Category: commands.AddInvoiceCommand.Category,
+	Usage:    "Add a new invoice to receive Taproot Assets.",
+	Description: `
+	Add a new invoice, expressing intent for a future payment, received in
+	Taproot Assets.
+	`,
+	ArgsUsage: "asset_id asset_amount",
+	Flags: append(
+		commands.AddInvoiceCommand.Flags,
+		cli.StringFlag{
+			Name:  "asset_id",
+			Usage: "the asset ID of the asset to receive",
+		},
+		cli.Uint64Flag{
+			Name:  "asset_amount",
+			Usage: "the amount of assets to receive",
+		},
+	),
+	Action: addInvoice,
+}
+
+func addInvoice(ctx *cli.Context) error {
+	args := ctx.Args()
+	ctxb := context.Background()
+
+	var assetIDStr string
+	switch {
+	case ctx.IsSet("asset_id"):
+		assetIDStr = ctx.String("asset_id")
+	case args.Present():
+		assetIDStr = args.First()
+		args = args.Tail()
+	default:
+		return fmt.Errorf("asset_id argument missing")
+	}
+
+	var (
+		assetAmount uint64
+		err         error
+	)
+	switch {
+	case ctx.IsSet("asset_amount"):
+		assetAmount = ctx.Uint64("asset_amount")
+	case args.Present():
+		assetAmount, err = strconv.ParseUint(args.First(), 10, 64)
+		if err != nil {
+			return fmt.Errorf("unable to parse asset amount %w",
+				err)
+		}
+	default:
+		return fmt.Errorf("asset_amount argument missing")
+	}
+
+	expiry := time.Now().Add(300 * time.Second)
+	if ctx.IsSet("expiry") {
+		expirySeconds := ctx.Uint64("expiry")
+		expiry = time.Now().Add(
+			time.Duration(expirySeconds) * time.Second,
+		)
+	}
+
+	lndConn, cleanup, err := connectClient(ctx, false)
+	if err != nil {
+		return fmt.Errorf("unable to make rpc con: %w", err)
+	}
+
+	defer cleanup()
+
+	lndClient := lnrpc.NewLightningClient(lndConn)
+
+	assetIDBytes, err := hex.DecodeString(assetIDStr)
+	if err != nil {
+		return fmt.Errorf("unable to decode assetID: %v", err)
+	}
+
+	// First, based on the asset ID and amount, we'll make sure that this
+	// channel even has enough funds to send.
+	assetBalances, err := computeAssetBalances(lndClient)
+	if err != nil {
+		return fmt.Errorf("unable to compute asset balances: %w", err)
+	}
+
+	balance, ok := assetBalances.Assets[assetIDStr]
+	if !ok {
+		return fmt.Errorf("unable to send asset_id=%v, not in "+
+			"channel", assetIDStr)
+	}
+
+	if balance.RemoteBalance == 0 {
+		return fmt.Errorf("no remote asset balance available for "+
+			"receiving asset_id=%v", assetIDStr)
+	}
+
+	var assetID asset.ID
+	copy(assetID[:], assetIDBytes)
+
+	tapdConn, cleanup, err := connectTapdClient(ctx)
+	if err != nil {
+		return fmt.Errorf("error creating tapd connection: %w", err)
+	}
+
+	defer cleanup()
+
+	peerPubKey, err := hex.DecodeString(balance.PeerPubKey)
+	if err != nil {
+		return fmt.Errorf("unable to decode peer pubkey: %w", err)
+	}
+
+	rfqClient := rfqrpc.NewRfqClient(tapdConn)
+
+	timeoutSeconds := uint32(60)
+	fmt.Printf("Asking peer %x for quote to buy assets to receive for "+
+		"invoice over %d units; waiting up to %ds\n", peerPubKey,
+		assetAmount, timeoutSeconds)
+
+	resp, err := rfqClient.AddAssetBuyOrder(
+		ctxb, &rfqrpc.AddAssetBuyOrderRequest{
+			AssetSpecifier: &rfqrpc.AssetSpecifier{
+				Id: &rfqrpc.AssetSpecifier_AssetIdStr{
+					AssetIdStr: assetIDStr,
+				},
+			},
+			MinAssetAmount: assetAmount,
+			Expiry:         uint64(expiry.Unix()),
+			PeerPubKey:     peerPubKey,
+			TimeoutSeconds: timeoutSeconds,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("error adding sell order: %w", err)
+	}
+
+	msatPerUnit := resp.AcceptedQuote.AskPrice
+	numMSats := lnwire.MilliSatoshi(assetAmount * msatPerUnit)
+
+	descHash, err := hex.DecodeString(ctx.String("description_hash"))
+	if err != nil {
+		return fmt.Errorf("unable to parse description_hash: %w", err)
+	}
+
+	invoice := &lnrpc.Invoice{
+		Memo:            ctx.String("memo"),
+		ValueMsat:       int64(numMSats),
+		DescriptionHash: descHash,
+		FallbackAddr:    ctx.String("fallback_addr"),
+		Expiry:          ctx.Int64("expiry"),
+		Private:         ctx.Bool("private"),
+		IsAmp:           ctx.Bool("amp"),
+		RouteHints: []*lnrpc.RouteHint{
+			{
+				HopHints: []*lnrpc.HopHint{
+					{
+						ChanId: resp.AcceptedQuote.Scid,
+						NodeId: balance.PeerPubKey,
+					},
+				},
+			},
+		},
+	}
+
+	invoiceResp, err := lndClient.AddInvoice(ctxb, invoice)
+	if err != nil {
+		return err
+	}
+
+	printRespJSON(invoiceResp)
+
+	return nil
 }
