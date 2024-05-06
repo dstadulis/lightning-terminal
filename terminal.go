@@ -1279,6 +1279,7 @@ func (g *LightningTerminal) buildAuxComponents() (*lnd.AuxComponents, error) {
 		),
 		AuxSigner:     fn.Some[lnwallet.AuxSigner](tapd),
 		TrafficShaper: fn.Some[routing.TlvTrafficShaper](tapd),
+		AuxDataParser: fn.Some[lnd.AuxDataParser](tapd),
 	}, nil
 }
 

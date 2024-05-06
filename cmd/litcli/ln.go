@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -49,24 +48,6 @@ var lnCommands = []cli.Command{
 		Subcommands: []cli.Command{
 			fundChannelCommand,
 			sendPaymentCommand,
-			copyCommand(
-				commands.ListChannelsCommand,
-				func(c *cli.Context) error {
-					return commands.ListChannels(
-						c,
-						listChannelsResponseDecorator,
-					)
-				},
-			),
-			copyCommand(
-				commands.ChannelBalanceCommand,
-				func(c *cli.Context) error {
-					return commands.ChannelBalance(
-						c,
-						channelBalanceResponseDecorator,
-					)
-				},
-			),
 			payInvoiceCommand,
 		},
 	},
@@ -213,17 +194,17 @@ func fundChannel(c *cli.Context) error {
 	return nil
 }
 
-type AssetBalance struct {
-	AssetID       string `json:"asset_id"`
-	Name          string `json:"name"`
-	LocalBalance  uint64 `json:"local_balance"`
-	RemoteBalance uint64 `json:"remote_balance"`
-	channelID     uint64
-	peerPubKey    string
+type assetBalance struct {
+	AssetID       string
+	Name          string
+	LocalBalance  uint64
+	RemoteBalance uint64
+	ChannelID     uint64
+	PeerPubKey    string
 }
 
 type channelBalResp struct {
-	Assets map[string]*AssetBalance `json:"assets"`
+	Assets map[string]*assetBalance `json:"assets"`
 }
 
 func computeAssetBalances(lnd lnrpc.LightningClient) (*channelBalResp, error) {
@@ -236,7 +217,7 @@ func computeAssetBalances(lnd lnrpc.LightningClient) (*channelBalResp, error) {
 	}
 
 	balanceResp := &channelBalResp{
-		Assets: make(map[string]*AssetBalance),
+		Assets: make(map[string]*assetBalance),
 	}
 	for _, openChan := range openChans.Channels {
 		if len(openChan.CustomChannelData) == 0 {
@@ -254,18 +235,18 @@ func computeAssetBalances(lnd lnrpc.LightningClient) (*channelBalResp, error) {
 			assetIDStr := hex.EncodeToString(assetID[:])
 			assetName := assetOutput.Proof.Val.Asset.Tag
 
-			assetBalance, ok := balanceResp.Assets[assetIDStr]
+			balance, ok := balanceResp.Assets[assetIDStr]
 			if !ok {
-				assetBalance = &AssetBalance{
+				balance = &assetBalance{
 					AssetID:    assetIDStr,
 					Name:       assetName,
-					channelID:  openChan.ChanId,
-					peerPubKey: openChan.RemotePubkey,
+					ChannelID:  openChan.ChanId,
+					PeerPubKey: openChan.RemotePubkey,
 				}
-				balanceResp.Assets[assetIDStr] = assetBalance
+				balanceResp.Assets[assetIDStr] = balance
 			}
 
-			assetBalance.LocalBalance += assetOutput.Amount.Val
+			balance.LocalBalance += assetOutput.Amount.Val
 		}
 
 		for _, assetOutput := range assetData.localCommit.RemoteOutputs() {
@@ -274,136 +255,20 @@ func computeAssetBalances(lnd lnrpc.LightningClient) (*channelBalResp, error) {
 			assetIDStr := hex.EncodeToString(assetID[:])
 			assetName := assetOutput.Proof.Val.Asset.Tag
 
-			assetBalance, ok := balanceResp.Assets[assetIDStr]
+			balance, ok := balanceResp.Assets[assetIDStr]
 			if !ok {
-				assetBalance = &AssetBalance{
+				balance = &assetBalance{
 					AssetID: assetIDStr,
 					Name:    assetName,
 				}
-				balanceResp.Assets[assetIDStr] = assetBalance
+				balanceResp.Assets[assetIDStr] = balance
 			}
 
-			assetBalance.RemoteBalance += assetOutput.Amount.Val
+			balance.RemoteBalance += assetOutput.Amount.Val
 		}
 	}
 
 	return balanceResp, nil
-}
-
-func channelBalanceResponseDecorator(c *cli.Context,
-	resp *lnrpc.ChannelBalanceResponse) error {
-
-	// For the channel balance, we'll hit ListChannels ourselves, then use
-	// all the blobs to sum up a total balance for each asset across all
-	// channels.
-	lndConn, cleanup, err := connectClient(c, false)
-	if err != nil {
-		return fmt.Errorf("unable to make rpc con: %w", err)
-	}
-
-	defer cleanup()
-
-	lndClient := lnrpc.NewLightningClient(lndConn)
-
-	balanceResp, err := computeAssetBalances(lndClient)
-	if err != nil {
-		return fmt.Errorf("unable to compute asset balances: %w", err)
-	}
-
-	jsonBytes, err := json.Marshal(balanceResp)
-	if err != nil {
-		return fmt.Errorf("error marshaling custom "+
-			"channel data: %w", err)
-	}
-
-	resp.CustomChannelData = jsonBytes
-
-	return nil
-}
-
-type assetGenesis struct {
-	GenesisPoint string `json:"genesis_point"`
-	Name         string `json:"name"`
-	MetaHash     string `json:"meta_hash"`
-	AssetID      string `json:"asset_id"`
-}
-
-type assetUtxo struct {
-	Version      int64        `json:"version"`
-	AssetGenesis assetGenesis `json:"asset_genesis"`
-	Amount       int64        `json:"amount"`
-	ScriptKey    string       `json:"script_key"`
-}
-
-type AssetChanInfo struct {
-	AssetInfo     assetUtxo `json:"asset_utxo"`
-	Capacity      int64     `json:"capacity"`
-	LocalBalance  int64     `json:"local_balance"`
-	RemoteBalance int64     `json:"remote_balance"`
-}
-
-type assetChannelResp struct {
-	Assets []AssetChanInfo `json:"assets"`
-}
-
-func listChannelsResponseDecorator(c *cli.Context,
-	resp *lnrpc.ListChannelsResponse) error {
-
-	for idx := range resp.Channels {
-		channel := resp.Channels[idx]
-
-		if len(channel.CustomChannelData) > 0 {
-
-			assetData, err := readCustomChanData(
-				channel.CustomChannelData,
-			)
-			if err != nil {
-				return err
-			}
-
-			localCommit := assetData.localCommit
-			openChannelRecord := assetData.openChan
-
-			rpcAssetList := &assetChannelResp{}
-			for _, output := range openChannelRecord.Assets() {
-				chanAsset := output.Proof.Val.Asset
-
-				assetID := chanAsset.ID()
-				assetInfo := AssetChanInfo{
-					AssetInfo: assetUtxo{
-						Version: int64(chanAsset.Version),
-						AssetGenesis: assetGenesis{
-							GenesisPoint: chanAsset.FirstPrevOut.String(),
-							Name:         chanAsset.Tag,
-							MetaHash:     hex.EncodeToString(chanAsset.MetaHash[:]),
-							AssetID:      hex.EncodeToString(assetID[:]),
-						},
-						Amount: int64(chanAsset.Amount),
-						ScriptKey: hex.EncodeToString(
-							chanAsset.ScriptKey.PubKey.SerializeCompressed(),
-						),
-					},
-					Capacity:      int64(output.Amount.Val),
-					LocalBalance:  int64(localCommit.LocalAssets.Val.Sum()),
-					RemoteBalance: int64(localCommit.RemoteAssets.Val.Sum()),
-				}
-
-				rpcAssetList.Assets = append(
-					rpcAssetList.Assets, assetInfo,
-				)
-			}
-
-			jsonBytes, err := json.Marshal(rpcAssetList)
-			if err != nil {
-				return fmt.Errorf("error marshaling custom "+
-					"channel data: %w", err)
-			}
-
-			channel.CustomChannelData = jsonBytes
-		}
-	}
-
-	return nil
 }
 
 var (
@@ -469,16 +334,16 @@ func sendPayment(ctx *cli.Context) error {
 		return fmt.Errorf("unable to compute asset balances: %w", err)
 	}
 
-	assetBalance, ok := assetBalances.Assets[assetIDStr]
+	balance, ok := assetBalances.Assets[assetIDStr]
 	if !ok {
 		return fmt.Errorf("unable to send asset_id=%v, not in "+
 			"channel", assetIDStr)
 	}
 
 	amtToSend := ctx.Uint64("amt")
-	if amtToSend > assetBalance.LocalBalance {
+	if amtToSend > balance.LocalBalance {
 		return fmt.Errorf("insufficient balance, want to send %v, "+
-			"only have %v", amtToSend, assetBalance.LocalBalance)
+			"only have %v", amtToSend, balance.LocalBalance)
 	}
 
 	var assetID asset.ID
@@ -623,13 +488,13 @@ func payInvoice(ctx *cli.Context) error {
 		return fmt.Errorf("unable to compute asset balances: %w", err)
 	}
 
-	assetBalance, ok := assetBalances.Assets[assetIDStr]
+	balance, ok := assetBalances.Assets[assetIDStr]
 	if !ok {
 		return fmt.Errorf("unable to send asset_id=%v, not in "+
 			"channel", assetIDStr)
 	}
 
-	if assetBalance.LocalBalance == 0 {
+	if balance.LocalBalance == 0 {
 		return fmt.Errorf("no asset balance available for asset_id=%v",
 			assetIDStr)
 	}
@@ -644,7 +509,7 @@ func payInvoice(ctx *cli.Context) error {
 
 	defer cleanup()
 
-	peerPubKey, err := hex.DecodeString(assetBalance.peerPubKey)
+	peerPubKey, err := hex.DecodeString(balance.PeerPubKey)
 	if err != nil {
 		return fmt.Errorf("unable to decode peer pubkey: %w", err)
 	}
@@ -663,7 +528,7 @@ func payInvoice(ctx *cli.Context) error {
 					AssetIdStr: assetIDStr,
 				},
 			},
-			MaxAssetAmount: assetBalance.LocalBalance,
+			MaxAssetAmount: balance.LocalBalance,
 			MinAsk:         uint64(decodeResp.NumMsat),
 			Expiry:         uint64(decodeResp.Expiry),
 			PeerPubKey:     peerPubKey,
