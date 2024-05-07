@@ -14,8 +14,8 @@ require (
 	github.com/lightninglabs/faraday v0.2.13-alpha
 	github.com/lightninglabs/lightning-node-connect v0.3.1-alpha
 	github.com/lightninglabs/lightning-terminal/autopilotserverrpc v0.0.1
-	github.com/lightninglabs/lndclient v1.0.1-0.20240506143949-c671665d2fae
-	github.com/lightninglabs/loop v0.28.0-beta
+	github.com/lightninglabs/lndclient v1.0.1-0.20240507201336-5498aec20775
+	github.com/lightninglabs/loop v0.28.1-beta.0.20240507202156-c6aa8c547d4c
 	github.com/lightninglabs/loop/swapserverrpc v1.0.7
 	github.com/lightninglabs/pool v0.6.4-beta.0.20231003174306-80d8854a0c4b
 	github.com/lightninglabs/pool/auctioneerrpc v1.1.1
@@ -223,8 +223,6 @@ replace github.com/lightninglabs/lightning-terminal/autopilotserverrpc => ./auto
 // allows us to specify that as an option. This is required for the
 // taproot-assets dependency to function properly.
 replace google.golang.org/protobuf => github.com/lightninglabs/protobuf-go-hex-display v1.30.0-hex-display
-
-replace github.com/lightninglabs/loop => github.com/lightninglabs/loop v0.28.0-beta.0.20240403110112-d456177b415a
 
 replace github.com/btcsuite/btcwallet => github.com/btcsuite/btcwallet v0.16.10-0.20240305014015-f7c216e78ee8
 

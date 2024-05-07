@@ -161,8 +161,7 @@ type assetBalance struct {
 	Name          string
 	LocalBalance  uint64
 	RemoteBalance uint64
-	ChannelID     uint64
-	PeerPubKey    string
+	Channel       *lnrpc.Channel
 }
 
 type channelBalResp struct {
@@ -200,10 +199,9 @@ func computeAssetBalances(lnd lnrpc.LightningClient) (*channelBalResp, error) {
 			balance, ok := balanceResp.Assets[assetID]
 			if !ok {
 				balance = &assetBalance{
-					AssetID:    assetID,
-					Name:       assetName,
-					ChannelID:  openChan.ChanId,
-					PeerPubKey: openChan.RemotePubkey,
+					AssetID: assetID,
+					Name:    assetName,
+					Channel: openChan,
 				}
 				balanceResp.Assets[assetID] = balance
 			}
@@ -454,7 +452,7 @@ func payInvoice(ctx *cli.Context) error {
 
 	defer cleanup()
 
-	peerPubKey, err := hex.DecodeString(balance.PeerPubKey)
+	peerPubKey, err := hex.DecodeString(balance.Channel.RemotePubkey)
 	if err != nil {
 		return fmt.Errorf("unable to decode peer pubkey: %w", err)
 	}
@@ -615,7 +613,7 @@ func addInvoice(ctx *cli.Context) error {
 
 	defer cleanup()
 
-	peerPubKey, err := hex.DecodeString(balance.PeerPubKey)
+	peerPubKey, err := hex.DecodeString(balance.Channel.RemotePubkey)
 	if err != nil {
 		return fmt.Errorf("unable to decode peer pubkey: %w", err)
 	}
@@ -652,6 +650,18 @@ func addInvoice(ctx *cli.Context) error {
 		return fmt.Errorf("unable to parse description_hash: %w", err)
 	}
 
+	ourPolicy, err := getOurPolicy(
+		lndClient, balance.Channel.ChanId, balance.Channel.RemotePubkey,
+	)
+
+	hopHint := &lnrpc.HopHint{
+		NodeId:                    balance.Channel.RemotePubkey,
+		ChanId:                    resp.AcceptedQuote.Scid,
+		FeeBaseMsat:               uint32(ourPolicy.FeeBaseMsat),
+		FeeProportionalMillionths: uint32(ourPolicy.FeeRateMilliMsat),
+		CltvExpiryDelta:           ourPolicy.TimeLockDelta,
+	}
+
 	invoice := &lnrpc.Invoice{
 		Memo:            ctx.String("memo"),
 		ValueMsat:       int64(numMSats),
@@ -662,12 +672,7 @@ func addInvoice(ctx *cli.Context) error {
 		IsAmp:           ctx.Bool("amp"),
 		RouteHints: []*lnrpc.RouteHint{
 			{
-				HopHints: []*lnrpc.HopHint{
-					{
-						ChanId: resp.AcceptedQuote.Scid,
-						NodeId: balance.PeerPubKey,
-					},
-				},
+				HopHints: []*lnrpc.HopHint{hopHint},
 			},
 		},
 	}
@@ -680,4 +685,23 @@ func addInvoice(ctx *cli.Context) error {
 	printRespJSON(invoiceResp)
 
 	return nil
+}
+
+func getOurPolicy(lndClient lnrpc.LightningClient, chanID uint64,
+	remotePubKey string) (*lnrpc.RoutingPolicy, error) {
+
+	ctxb := context.Background()
+	edge, err := lndClient.GetChanInfo(ctxb, &lnrpc.ChanInfoRequest{
+		ChanId: chanID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("unable to fetch channel: %w", err)
+	}
+
+	policy := edge.Node1Policy
+	if edge.Node1Pub == remotePubKey {
+		policy = edge.Node2Policy
+	}
+
+	return policy, nil
 }
