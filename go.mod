@@ -14,7 +14,7 @@ require (
 	github.com/lightninglabs/faraday v0.2.13-alpha
 	github.com/lightninglabs/lightning-node-connect v0.3.1-alpha
 	github.com/lightninglabs/lightning-terminal/autopilotserverrpc v0.0.1
-	github.com/lightninglabs/lndclient v1.0.1-0.20240514180715-a840a0a51dee
+	github.com/lightninglabs/lndclient v1.0.1-0.20240516095527-432811d1320d
 	github.com/lightninglabs/loop v0.28.1-beta.0.20240507202156-c6aa8c547d4c
 	github.com/lightninglabs/loop/swapserverrpc v1.0.7
 	github.com/lightninglabs/pool v0.6.4-beta.0.20231003174306-80d8854a0c4b

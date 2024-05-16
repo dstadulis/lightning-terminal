@@ -70,6 +70,7 @@ func testCustomChannels(ctx context.Context, net *NetworkHarness,
 		"--protocol.zero-conf",
 		"--protocol.simple-taproot-chans",
 		"--accept-keysend",
+		"--debuglevel=trace",
 	}
 	litdArgs := []string{
 		"--taproot-assets.allow-public-uni-proof-courier",
@@ -82,7 +83,7 @@ func testCustomChannels(ctx context.Context, net *NetworkHarness,
 	}
 
 	// The topology we are going for looks like the following:
-	// Charlie -- (CC) --> Dave -- (NC) --> Erin -- (CC) --> Fabia
+	// Charlie ---CC---> Dave ---NC---> Erin ---CC---> Fabia
 	// With CC being a custom channel and NC being a normal channel.
 	// All 4 nodes need to be full litd nodes running in integrated mode
 	// with tapd included. We also need specific flags to be enabled, so we
@@ -105,6 +106,16 @@ func testCustomChannels(ctx context.Context, net *NetworkHarness,
 	nodes := []*HarnessNode{charlie, dave, erin, fabia}
 	connectAllNodes(t.t, net, nodes)
 	fundAllNodes(t.t, net, nodes)
+
+	// Create the normal channel between Dave and Erin.
+	t.Logf("Opening normal channel between Dave and Erin...")
+	channelOp := openChannelAndAssert(
+		t, net, dave, erin, lntest.OpenChannelParams{
+			Amt:         5_000_000,
+			SatPerVByte: 5,
+		},
+	)
+	defer closeChannelAndAssert(t, net, dave, channelOp, false)
 
 	charlieTap := newTapClient(t.t, charlie)
 	erinTap := newTapClient(t.t, erin)
@@ -154,18 +165,10 @@ func testCustomChannels(ctx context.Context, net *NetworkHarness,
 	)
 	itest.AssertNonInteractiveRecvComplete(t.t, erinTap, 1)
 
-	// Create the normal channel between Dave and Erin.
-	channelOp := openChannelAndAssert(
-		t, net, dave, erin, lntest.OpenChannelParams{
-			Amt:         5_000_000,
-			SatPerVByte: 5,
-		},
-	)
-	defer closeChannelAndAssert(t, net, dave, channelOp, false)
-
 	// This is the only public channel, we need everyone to be aware of it.
 	assertChannelKnown(t.t, charlie, channelOp)
 
+	t.Logf("Opening asset channels...")
 	fundResp, err := charlieTap.FundChannel(
 		ctxb, &taprpc.FundChannelRequest{
 			Amount:             fundingAmount,
@@ -222,18 +225,39 @@ func testCustomChannels(ctx context.Context, net *NetworkHarness,
 	// ------------
 	// Test case 2: Pay a normal invoice from Erin by Charlie.
 	// ------------
-	payNormalInvoice(t.t, charlie, erin, 20_000, cents.AssetGenesis.AssetId)
+	createAndPayNormalInvoice(
+		t.t, charlie, dave, erin, 20_000, cents.AssetGenesis.AssetId,
+	)
 	balanceCharlie, err = getChannelCustomData(charlie, dave)
 	require.NoError(t.t, err)
 	t.Logf("Charlie balance after invoice payment: %v",
 		toJSON(t.t, balanceCharlie))
+
+	// ------------
+	// Test case 3: Create an asset invoice on Fabia and pay it from
+	// Charlie.
+	// ------------
+	invoiceResp := createAssetInvoice(
+		t.t, erin, fabia, 1000, cents.AssetGenesis.AssetId,
+	)
+	payInvoiceWithAssets(
+		t.t, charlie, dave, invoiceResp, cents.AssetGenesis.AssetId,
+	)
+	balanceCharlie, err = getChannelCustomData(charlie, dave)
+	require.NoError(t.t, err)
+	t.Logf("Charlie balance after invoice payment: %v",
+		toJSON(t.t, balanceCharlie))
+	balanceFabia, err := getChannelCustomData(fabia, erin)
+	require.NoError(t.t, err)
+	t.Logf("Fabia balance after invoice payment: %v",
+		toJSON(t.t, balanceFabia))
 }
 
 func connectAllNodes(t *testing.T, net *NetworkHarness, nodes []*HarnessNode) {
 	for i, node := range nodes {
 		for j := i + 1; j < len(nodes); j++ {
 			peer := nodes[j]
-			net.ConnectNodes(t, node, peer)
+			net.ConnectNodesPerm(t, node, peer)
 		}
 	}
 }
@@ -420,50 +444,60 @@ func sendKeySendPayment(t *testing.T, src, dst *HarnessNode, amt uint64,
 	require.Equal(t, lnrpc.Payment_SUCCEEDED, result.Status)
 }
 
-func payNormalInvoice(t *testing.T, src, dst *HarnessNode, amt int64,
-	assetID []byte) {
+func createAndPayNormalInvoice(t *testing.T, src, rfqPeer, dst *HarnessNode,
+	amountSat btcutil.Amount, assetID []byte) {
 
 	ctxb := context.Background()
 	ctxt, cancel := context.WithTimeout(ctxb, defaultTimeout)
 	defer cancel()
 
-	amtMsat := lnwire.NewMSatFromSatoshis(btcutil.Amount(amt))
 	expirySeconds := 10
-	expiryUnix := time.Now().Add(
-		time.Duration(expirySeconds) * time.Second,
-	).Unix()
-
 	invoiceResp, err := dst.AddInvoice(ctxt, &lnrpc.Invoice{
-		Value:  amt,
+		Value:  int64(amountSat),
 		Memo:   "normal invoice",
 		Expiry: int64(expirySeconds),
 	})
 	require.NoError(t, err)
 
-	srcTapd := newTapClient(t, src)
+	payInvoiceWithAssets(t, src, rfqPeer, invoiceResp, assetID)
+}
+
+func payInvoiceWithAssets(t *testing.T, payer, rfqPeer *HarnessNode,
+	invoice *lnrpc.AddInvoiceResponse, assetID []byte) {
+
+	ctxb := context.Background()
+	ctxt, cancel := context.WithTimeout(ctxb, defaultTimeout)
+	defer cancel()
+
+	payerTapd := newTapClient(t, payer)
+
+	decodedInvoice, err := payer.DecodePayReq(ctxt, &lnrpc.PayReqString{
+		PayReq: invoice.PaymentRequest,
+	})
+	require.NoError(t, err)
 
 	timeoutSeconds := uint32(60)
-	resp, err := srcTapd.AddAssetSellOrder(
+	resp, err := payerTapd.AddAssetSellOrder(
 		ctxb, &rfqrpc.AddAssetSellOrderRequest{
 			AssetSpecifier: &rfqrpc.AssetSpecifier{
 				Id: &rfqrpc.AssetSpecifier_AssetId{
 					AssetId: assetID,
 				},
 			},
-			MaxAssetAmount: 9999999,
-			MinAsk:         uint64(amtMsat),
-			Expiry:         uint64(expiryUnix),
-			PeerPubKey:     dst.PubKey[:],
+			MaxAssetAmount: 25_000,
+			MinAsk:         uint64(decodedInvoice.NumMsat),
+			Expiry:         uint64(decodedInvoice.Expiry),
+			PeerPubKey:     rfqPeer.PubKey[:],
 			TimeoutSeconds: timeoutSeconds,
 		},
 	)
 	require.NoError(t, err)
 
 	mSatPerUnit := resp.AcceptedQuote.BidPrice
-	numUnits := uint64(amtMsat) / mSatPerUnit
+	numUnits := uint64(decodedInvoice.NumMsat) / mSatPerUnit
 
 	t.Logf("Got quote for %v asset units at %v msat/unit from peer "+
-		"%x with SCID %d\n", numUnits, mSatPerUnit, dst.PubKey[:],
+		"%x with SCID %d\n", numUnits, mSatPerUnit, rfqPeer.PubKey[:],
 		resp.AcceptedQuote.Scid)
 
 	var rfqID rfqmsg.ID
@@ -476,12 +510,12 @@ func payNormalInvoice(t *testing.T, src, dst *HarnessNode, amt int64,
 	require.NoError(t, err)
 
 	sendReq := &routerrpc.SendPaymentRequest{
-		PaymentRequest:        invoiceResp.PaymentRequest,
+		PaymentRequest:        invoice.PaymentRequest,
 		TimeoutSeconds:        2,
 		FirstHopCustomRecords: htlcMapRecords,
-		FeeLimitMsat:          1000,
+		FeeLimitMsat:          1_000_000,
 	}
-	stream, err := src.RouterClient.SendPaymentV2(ctxt, sendReq)
+	stream, err := payer.RouterClient.SendPaymentV2(ctxt, sendReq)
 	require.NoError(t, err)
 
 	time.Sleep(time.Second)
@@ -489,6 +523,76 @@ func payNormalInvoice(t *testing.T, src, dst *HarnessNode, amt int64,
 	result, err := getPaymentResult(stream)
 	require.NoError(t, err)
 	require.Equal(t, lnrpc.Payment_SUCCEEDED, result.Status)
+}
+
+func createAssetInvoice(t *testing.T, dstRfqPeer, dst *HarnessNode,
+	assetAmount uint64, assetID []byte) *lnrpc.AddInvoiceResponse {
+
+	ctxb := context.Background()
+	ctxt, cancel := context.WithTimeout(ctxb, defaultTimeout)
+	defer cancel()
+
+	timeoutSeconds := uint32(60)
+	expiry := time.Now().Add(time.Duration(timeoutSeconds) * time.Second)
+
+	t.Logf("Asking peer %x for quote to buy assets to receive for "+
+		"invoice over %d units; waiting up to %ds",
+		dstRfqPeer.PubKey[:], assetAmount, timeoutSeconds)
+
+	dstTapd := newTapClient(t, dst)
+	resp, err := dstTapd.AddAssetBuyOrder(
+		ctxt, &rfqrpc.AddAssetBuyOrderRequest{
+			AssetSpecifier: &rfqrpc.AssetSpecifier{
+				Id: &rfqrpc.AssetSpecifier_AssetId{
+					AssetId: assetID,
+				},
+			},
+			MinAssetAmount: assetAmount,
+			Expiry:         uint64(expiry.Unix()),
+			PeerPubKey:     dstRfqPeer.PubKey[:],
+			TimeoutSeconds: timeoutSeconds,
+		},
+	)
+	require.NoError(t, err)
+
+	msatPerUnit := resp.AcceptedQuote.AskPrice
+	numMSats := lnwire.MilliSatoshi(assetAmount * msatPerUnit)
+
+	peerChannels, err := dst.ListChannels(ctxt, &lnrpc.ListChannelsRequest{
+		Peer: dstRfqPeer.PubKey[:],
+	})
+	require.NoError(t, err)
+	require.Len(t, peerChannels.Channels, 1)
+	peerChannel := peerChannels.Channels[0]
+
+	ourPolicy, err := getOurPolicy(
+		dst, peerChannel.ChanId, dstRfqPeer.PubKeyStr,
+	)
+
+	hopHint := &lnrpc.HopHint{
+		NodeId:                    dstRfqPeer.PubKeyStr,
+		ChanId:                    resp.AcceptedQuote.Scid,
+		FeeBaseMsat:               uint32(ourPolicy.FeeBaseMsat),
+		FeeProportionalMillionths: uint32(ourPolicy.FeeRateMilliMsat),
+		CltvExpiryDelta:           ourPolicy.TimeLockDelta,
+	}
+
+	invoice := &lnrpc.Invoice{
+		Memo: fmt.Sprintf("this is an asset invoice over "+
+			"%d units", assetAmount),
+		ValueMsat: int64(numMSats),
+		Expiry:    int64(timeoutSeconds),
+		RouteHints: []*lnrpc.RouteHint{
+			{
+				HopHints: []*lnrpc.HopHint{hopHint},
+			},
+		},
+	}
+
+	invoiceResp, err := dst.AddInvoice(ctxb, invoice)
+	require.NoError(t, err)
+
+	return invoiceResp
 }
 
 type tapClient struct {
@@ -563,6 +667,25 @@ func connectRPCWithMac(ctx context.Context, hostPort, tlsCertPath,
 	opts = append(opts, macOption)
 
 	return grpc.DialContext(ctx, hostPort, opts...)
+}
+
+func getOurPolicy(node *HarnessNode, chanID uint64,
+	remotePubKey string) (*lnrpc.RoutingPolicy, error) {
+
+	ctxb := context.Background()
+	edge, err := node.GetChanInfo(ctxb, &lnrpc.ChanInfoRequest{
+		ChanId: chanID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("unable to fetch channel: %w", err)
+	}
+
+	policy := edge.Node1Policy
+	if edge.Node1Pub == remotePubKey {
+		policy = edge.Node2Policy
+	}
+
+	return policy, nil
 }
 
 // readMacaroon tries to read the macaroon file at the specified path and create

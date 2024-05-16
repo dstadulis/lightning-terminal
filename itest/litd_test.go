@@ -130,6 +130,6 @@ func (h *harnessTest) setupLogging() {
 	require.NoError(h.t, err)
 	interceptor = &ic
 
-	err = build.ParseAndSetDebugLevels("debug", logWriter)
+	err = build.ParseAndSetDebugLevels("trace", logWriter)
 	require.NoError(h.t, err)
 }
